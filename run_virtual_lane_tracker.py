@@ -41,6 +41,8 @@ class KeyState:
         self.quit_requested = False
         self._lkas_toggle_requested = False
         self._stop_requested = False
+        self._color_toggle_requested = False
+        self._drive_mode_toggle_requested = False
 
     def press(self, name: str):
         with self._lock:
@@ -71,6 +73,26 @@ class KeyState:
     def request_stop(self):
         with self._lock:
             self._stop_requested = True
+
+    def request_color_toggle(self):
+        with self._lock:
+            self._color_toggle_requested = True
+
+    def consume_color_toggle(self) -> bool:
+        with self._lock:
+            requested = self._color_toggle_requested
+            self._color_toggle_requested = False
+            return requested
+
+    def request_drive_mode_toggle(self):
+        with self._lock:
+            self._drive_mode_toggle_requested = True
+
+    def consume_drive_mode_toggle(self) -> bool:
+        with self._lock:
+            requested = self._drive_mode_toggle_requested
+            self._drive_mode_toggle_requested = False
+            return requested
 
     def consume_stop(self) -> bool:
         with self._lock:
@@ -110,6 +132,14 @@ def start_keyboard_listener(state: KeyState):
         elif name == "space":
             state.clear_drive_keys()
             state.request_stop()
+        elif name == "p":
+            if not state.is_down("p"):
+                state.press("p")
+                state.request_color_toggle()
+        elif name == "m":
+            if not state.is_down("m"):
+                state.press("m")
+                state.request_drive_mode_toggle()
         elif name in {"q", "esc"}:
             state.quit_requested = True
             state.clear_drive_keys()
@@ -117,7 +147,7 @@ def start_keyboard_listener(state: KeyState):
 
     def on_release(key):
         name = normalize(key)
-        if name in {"w", "a", "s", "d", "l"}:
+        if name in {"w", "a", "s", "d", "l", "p", "m"}:
             state.release(name)
 
     listener = keyboard.Listener(on_press=on_press, on_release=on_release)

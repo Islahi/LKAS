@@ -4,7 +4,7 @@
 # QLABS / QCAR2 SETUP
 # -----------------------------------------------------------------------------
 QCAR_ACTOR_NUMBER = 0
-QCAR_START_POSITION = [0.788, 2.415, 1.5]
+QCAR_START_POSITION = [0.788, 5, 1.5]
 QCAR_START_ORIENTATION = [0.0, 0.0, 0.0]
 QCAR_SCALE = [1.0, 1.0, 1.0]
 RT_START_WAIT_S = 2.0
@@ -31,10 +31,10 @@ CANNY_HIGH = 150
 # Order: bottom-left, top-left, top-right, bottom-right.
 # These are starting values for Open Road; tune while looking at the ROI window.
 ROI_POINTS = [
-    (0.05, 1.00),
-    (0.38, 0.56),
-    (0.62, 0.56),
-    (0.95, 1.00),
+    (0.02, 1.00),
+    (0.30, 0.52),
+    (0.70, 0.52),
+    (0.98, 1.00),
 ]
 
 # Hough transform
@@ -58,7 +58,7 @@ MIN_CLUSTER_WEIGHT = 35.0
 CENTER_EXCLUSION_PX = 20
 
 # Temporal smoothing. Higher = trust the previous line more.
-SMOOTHING = 0.65
+SMOOTHING = 0.50
 MAX_LOST_FRAMES = 5
 
 # Where to evaluate lane-center error for visualization.
@@ -73,21 +73,21 @@ CONFIDENCE_FULL_WEIGHT = 140.0
 # -----------------------------------------------------------------------------
 # MANUAL KEYBOARD DRIVING
 # -----------------------------------------------------------------------------
-MANUAL_THROTTLE = 0.12
+MANUAL_THROTTLE = 0.20
 MANUAL_REVERSE_THROTTLE = -0.08
 MANUAL_STEERING = 0.32
 
 # QCar write safety clamps.
-MAX_ABS_THROTTLE = 0.20
+MAX_ABS_THROTTLE = 0.12
 MAX_ABS_STEERING = 0.50
 
 # -----------------------------------------------------------------------------
 # LKAS PID STEERING
 # L toggles LKAS. Throttle remains manual. A/D immediately disengage LKAS.
 # -----------------------------------------------------------------------------
-PID_KP = 0.42
+PID_KP = 0.50
 PID_KI = 0.015
-PID_KD = 0.035
+PID_KD = 0.040
 PID_INTEGRAL_LIMIT = 0.35
 PID_DERIVATIVE_FILTER = 0.80
 PID_MIN_DT_S = 0.005
@@ -95,10 +95,10 @@ PID_MAX_DT_S = 0.10
 
 # Conservative steering magnitude and slew-rate limits.
 LKAS_MAX_ABS_STEERING = 0.22
-LKAS_MAX_STEERING_RATE = 0.55
+LKAS_MAX_STEERING_RATE = 0.70
 
 # Engagement requires stable confidence; disengagement is immediate.
-LKAS_MIN_CONFIDENCE = 0.65
+LKAS_MIN_CONFIDENCE = 0.60
 LKAS_ENGAGE_FRAMES = 8
 
 # -----------------------------------------------------------------------------
