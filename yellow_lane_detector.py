@@ -8,6 +8,9 @@ from lane_detector import LaneTracker
 
 
 COLOR_EDITOR_WINDOW = "Lane Color Picker - Yellow HSV"
+DEFAULT_CAMERA_CENTER_OFFSET_PX = 12
+CAMERA_CENTER_OFFSET_RANGE_PX = 80
+YELLOW_MAX_LOST_FRAMES = 45
 
 
 class YellowLaneTracker(LaneTracker):
@@ -19,6 +22,7 @@ class YellowLaneTracker(LaneTracker):
         # adapt it to the map's lighting and material.
         self.lower_hsv = np.array([15, 80, 80], dtype=np.uint8)
         self.upper_hsv = np.array([40, 255, 255], dtype=np.uint8)
+        self.camera_center_offset_px = DEFAULT_CAMERA_CENTER_OFFSET_PX
         self.editor_visible = False
         self.last_hsv = None
         self.last_frame_shape = None
@@ -27,6 +31,12 @@ class YellowLaneTracker(LaneTracker):
     @staticmethod
     def _noop(_value):
         pass
+
+    def _vehicle_center_x(self, width):
+        return width / 2.0 + self.camera_center_offset_px
+
+    def _max_lost_frames(self):
+        return YELLOW_MAX_LOST_FRAMES
 
     def open_color_editor(self):
         if self.editor_visible:
@@ -41,6 +51,12 @@ class YellowLaneTracker(LaneTracker):
             ("S high", 0, 255, int(self.upper_hsv[1])),
             ("V low", 0, 255, int(self.lower_hsv[2])),
             ("V high", 0, 255, int(self.upper_hsv[2])),
+            (
+                "Center offset",
+                0,
+                2 * CAMERA_CENTER_OFFSET_RANGE_PX,
+                self.camera_center_offset_px + CAMERA_CENTER_OFFSET_RANGE_PX,
+            ),
         )
         for name, _minimum, maximum, initial in controls:
             cv2.createTrackbar(
@@ -74,6 +90,9 @@ class YellowLaneTracker(LaneTracker):
             s_high = cv2.getTrackbarPos("S high", COLOR_EDITOR_WINDOW)
             v_low = cv2.getTrackbarPos("V low", COLOR_EDITOR_WINDOW)
             v_high = cv2.getTrackbarPos("V high", COLOR_EDITOR_WINDOW)
+            center_position = cv2.getTrackbarPos(
+                "Center offset", COLOR_EDITOR_WINDOW
+            )
         except cv2.error:
             self.editor_visible = False
             return
@@ -85,6 +104,9 @@ class YellowLaneTracker(LaneTracker):
         self.upper_hsv = np.array(
             [max(h_low, h_high), max(s_low, s_high), max(v_low, v_high)],
             dtype=np.uint8,
+        )
+        self.camera_center_offset_px = (
+            center_position - CAMERA_CENTER_OFFSET_RANGE_PX
         )
 
     def _pick_from_preview(self, event, x, y, _flags, _parameter):
@@ -153,6 +175,11 @@ class YellowLaneTracker(LaneTracker):
             mask_preview,
             f"HSV {self.lower_hsv.tolist()} to {self.upper_hsv.tolist()}",
             (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1,
+        )
+        cv2.putText(
+            mask_preview,
+            f"Camera-center offset: {self.camera_center_offset_px:+d} px",
+            (10, 76), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1,
         )
         cv2.imshow(
             COLOR_EDITOR_WINDOW,

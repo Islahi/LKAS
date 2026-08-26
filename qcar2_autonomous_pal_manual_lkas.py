@@ -49,6 +49,18 @@ REENGAGE_CONFIDENT_FRAMES = cfg.LKAS_ENGAGE_FRAMES
 KEYBOARD_NOISE_STEERING = 0.070
 LKAS_WITH_NOISE_MAX_ABS_STEERING = 0.280
 
+# Briefly bridge curve/dash detection dropouts using the tracker's recent line
+# estimates. This is intentionally short and slower than normal operation.
+DEGRADED_TURN_GRACE_S = 1.0
+DEGRADED_TURN_MAX_THROTTLE = 0.055
+
+# If neither boundary is freshly visible, keep the last autonomous steering
+# command briefly instead of forcing the wheels straight. This lets a command
+# that entered a curve continue through a short blind patch. PWM is capped so
+# the car covers less distance while driving without a fresh visual reference.
+BLIND_COMMAND_HOLD_S = 2.0
+BLIND_HOLD_MAX_THROTTLE = 0.040
+
 def approach(value, target, rate_per_s, dt):
     max_step = max(0.0, rate_per_s * dt)
     return float(np.clip(target, value - max_step, value + max_step))
@@ -134,6 +146,12 @@ def main(setup_vehicle=True, tracker_factory=LaneTracker):
         confident_frames = 0
         throttle = 0.0
         last_command = SteeringCommand(0.0, None)
+        degraded_start_time = None
+        degraded_turn_active = False
+        degraded_elapsed_s = 0.0
+        blind_start_time = None
+        blind_hold_active = False
+        blind_elapsed_s = 0.0
 
         leds = np.zeros(8, dtype=int)
         previous_time = time.perf_counter()
@@ -160,6 +178,10 @@ def main(setup_vehicle=True, tracker_factory=LaneTracker):
                 autonomy_engaged = False
                 confident_frames = 0
                 throttle = 0.0
+                degraded_start_time = None
+                degraded_turn_active = False
+                blind_start_time = None
+                blind_hold_active = False
                 controller.reset()
                 keys.clear_drive_keys()
                 car.read_write_std(0.0, 0.0, leds)
@@ -177,6 +199,10 @@ def main(setup_vehicle=True, tracker_factory=LaneTracker):
                 else:
                     autonomy_engaged = False
                     confident_frames = 0
+                    degraded_start_time = None
+                    degraded_turn_active = False
+                    blind_start_time = None
+                    blind_hold_active = False
                     controller.reset()
                     throttle = approach(
                         throttle, 0.0, THROTTLE_DECEL_RATE_PER_S, dt
@@ -202,6 +228,10 @@ def main(setup_vehicle=True, tracker_factory=LaneTracker):
                     autonomy_requested = not autonomy_requested
                     autonomy_engaged = False
                     confident_frames = 0
+                    degraded_start_time = None
+                    degraded_turn_active = False
+                    blind_start_time = None
+                    blind_hold_active = False
                     controller.reset()
                     print(
                         "Autonomy requested; waiting for stable lanes."
@@ -214,6 +244,10 @@ def main(setup_vehicle=True, tracker_factory=LaneTracker):
                 autonomy_engaged = False
                 confident_frames = 0
                 throttle = 0.0
+                degraded_start_time = None
+                degraded_turn_active = False
+                blind_start_time = None
+                blind_hold_active = False
                 controller.reset()
                 car.read_write_std(0.0, 0.0, leds)
                 print("Emergency stop; autonomy cancelled.")
@@ -228,9 +262,21 @@ def main(setup_vehicle=True, tracker_factory=LaneTracker):
                 and result.right_detected
                 and result.confidence >= cfg.LKAS_MIN_CONFIDENCE
             )
+            degraded_tracking_ok = (
+                result.error_px is not None
+                and result.left is not None
+                and result.right is not None
+                and (result.left_detected or result.right_detected)
+            )
+            degraded_turn_active = False
+            degraded_elapsed_s = 0.0
+            blind_hold_active = False
+            blind_elapsed_s = 0.0
 
             if autonomy_requested and not manual_mode:
                 if confidence_ok:
+                    degraded_start_time = None
+                    blind_start_time = None
                     confident_frames = min(
                         confident_frames + 1, REENGAGE_CONFIDENT_FRAMES
                     )
@@ -238,16 +284,71 @@ def main(setup_vehicle=True, tracker_factory=LaneTracker):
                         if not autonomy_engaged:
                             print("Autonomy engaged.")
                         autonomy_engaged = True
+                elif autonomy_engaged and degraded_tracking_ok:
+                    blind_start_time = None
+                    if degraded_start_time is None:
+                        degraded_start_time = time.perf_counter()
+                        print(
+                            "Turn detection degraded; continuing slowly from recent lanes."
+                        )
+                    degraded_elapsed_s = (
+                        time.perf_counter() - degraded_start_time
+                    )
+                    if degraded_elapsed_s <= DEGRADED_TURN_GRACE_S:
+                        degraded_turn_active = True
+                    else:
+                        print(
+                            "Degraded-turn grace expired; slowing to reacquire."
+                        )
+                        autonomy_engaged = False
+                        confident_frames = 0
+                        degraded_start_time = None
+                        controller.reset()
+                elif autonomy_engaged:
+                    degraded_start_time = None
+                    if blind_start_time is None:
+                        blind_start_time = time.perf_counter()
+                        print(
+                            "Both lanes lost; holding the last steering command slowly."
+                        )
+                    blind_elapsed_s = time.perf_counter() - blind_start_time
+                    if blind_elapsed_s <= BLIND_COMMAND_HOLD_S:
+                        blind_hold_active = True
+                    else:
+                        print(
+                            "Blind-command hold expired; slowing to reacquire."
+                        )
+                        autonomy_engaged = False
+                        confident_frames = 0
+                        blind_start_time = None
+                        controller.reset()
                 else:
-                    if autonomy_engaged:
-                        print("Lane confidence lost; slowing and waiting to reacquire.")
                     autonomy_engaged = False
                     confident_frames = 0
+                    degraded_start_time = None
+                    blind_start_time = None
                     controller.reset()
 
             if manual_mode:
                 throttle, steering = manual_commands(keys)
                 last_command = SteeringCommand(steering, None)
+            elif autonomy_engaged and blind_hold_active:
+                # Do not update the PID from stale/fallback geometry. Preserve
+                # its last valid turn (or zero for straight driving).
+                steering = float(np.clip(
+                    last_command.steering + steering_noise,
+                    -LKAS_WITH_NOISE_MAX_ABS_STEERING,
+                    LKAS_WITH_NOISE_MAX_ABS_STEERING,
+                ))
+                # Never accelerate while blind. Hold a low existing PWM or
+                # smoothly reduce a higher one to the blind-driving cap.
+                target_throttle = min(throttle, BLIND_HOLD_MAX_THROTTLE)
+                throttle = approach(
+                    throttle,
+                    target_throttle,
+                    THROTTLE_DECEL_RATE_PER_S,
+                    dt,
+                )
             elif autonomy_engaged and result.error_px is not None:
                 last_command = controller.update(
                     result.error_px, display.shape[1], dt
@@ -258,6 +359,10 @@ def main(setup_vehicle=True, tracker_factory=LaneTracker):
                     LKAS_WITH_NOISE_MAX_ABS_STEERING,
                 ))
                 target_throttle = automatic_throttle_target(result, steering)
+                if degraded_turn_active:
+                    target_throttle = min(
+                        target_throttle, DEGRADED_TURN_MAX_THROTTLE
+                    )
                 throttle_rate = (
                     THROTTLE_ACCEL_RATE_PER_S
                     if target_throttle > throttle
@@ -292,6 +397,18 @@ def main(setup_vehicle=True, tracker_factory=LaneTracker):
             if manual_mode:
                 mode = "MANUAL"
                 mode_color = (255, 0, 255)
+            elif blind_hold_active:
+                mode = (
+                    f"BLIND-HOLD {blind_elapsed_s:.1f}/"
+                    f"{BLIND_COMMAND_HOLD_S:.1f}s"
+                )
+                mode_color = (0, 0, 255)
+            elif degraded_turn_active:
+                mode = (
+                    f"TURN-GRACE {degraded_elapsed_s:.1f}/"
+                    f"{DEGRADED_TURN_GRACE_S:.1f}s"
+                )
+                mode_color = (0, 255, 255)
             elif autonomy_engaged:
                 mode = "ENGAGED"
                 mode_color = (0, 255, 0)

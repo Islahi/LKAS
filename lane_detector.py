@@ -77,6 +77,13 @@ class LaneTracker:
         ]
         return np.array([points], dtype=np.int32)
 
+    def _vehicle_center_x(self, width: int) -> float:
+        """Image X used as the vehicle reference; subclasses may calibrate it."""
+        return width / 2.0
+
+    def _max_lost_frames(self) -> int:
+        return cfg.MAX_LOST_FRAMES
+
     def preprocess(self, frame_bgr: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         if cfg.USE_CLAHE:
@@ -170,7 +177,7 @@ class LaneTracker:
             return smoothed, smoothed, 0
 
         lost_frames += 1
-        if previous is not None and lost_frames <= cfg.MAX_LOST_FRAMES:
+        if previous is not None and lost_frames <= self._max_lost_frames():
             # Briefly hold the previous visual estimate for display. Confidence
             # remains zero unless both boundaries were freshly detected, so the
             # controller cannot steer from these held lines.
@@ -181,7 +188,7 @@ class LaneTracker:
     def process(self, frame_bgr: np.ndarray) -> TrackingResult:
         edges, roi_edges, polygon = self.preprocess(frame_bgr)
         h, w = frame_bgr.shape[:2]
-        vehicle_center_x = w / 2.0
+        vehicle_center_x = self._vehicle_center_x(w)
         y_bottom = float(h - 1)
 
         raw = cv2.HoughLinesP(
