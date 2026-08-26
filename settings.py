@@ -1,8 +1,4 @@
-"""Easy-to-edit settings for the QCar2 virtual lane tracker.
-
-Only edit this file when tuning the tracker.
-The tracker does NOT control steering automatically.
-"""
+"""Easy-to-edit settings for QCar2 lane tracking and LKAS control."""
 
 # -----------------------------------------------------------------------------
 # QLABS / QCAR2 SETUP
@@ -69,16 +65,41 @@ MAX_LOST_FRAMES = 5
 # 1.0 = very bottom of image; 0.75 = 75% down the image.
 ERROR_Y_FRACTION = 0.88
 
+# Confidence requires two freshly detected boundaries with plausible separation.
+MIN_LANE_WIDTH_FRACTION = 0.28
+MAX_LANE_WIDTH_FRACTION = 0.78
+CONFIDENCE_FULL_WEIGHT = 140.0
+
 # -----------------------------------------------------------------------------
-# MANUAL KEYBOARD DRIVING ONLY
+# MANUAL KEYBOARD DRIVING
 # -----------------------------------------------------------------------------
 MANUAL_THROTTLE = 0.12
 MANUAL_REVERSE_THROTTLE = -0.08
 MANUAL_STEERING = 0.32
 
-# QCar write safety clamps. These are manual-control limits, not LKAS outputs.
+# QCar write safety clamps.
 MAX_ABS_THROTTLE = 0.20
 MAX_ABS_STEERING = 0.50
+
+# -----------------------------------------------------------------------------
+# LKAS PID STEERING
+# L toggles LKAS. Throttle remains manual. A/D immediately disengage LKAS.
+# -----------------------------------------------------------------------------
+PID_KP = 0.42
+PID_KI = 0.015
+PID_KD = 0.035
+PID_INTEGRAL_LIMIT = 0.35
+PID_DERIVATIVE_FILTER = 0.80
+PID_MIN_DT_S = 0.005
+PID_MAX_DT_S = 0.10
+
+# Conservative steering magnitude and slew-rate limits.
+LKAS_MAX_ABS_STEERING = 0.22
+LKAS_MAX_STEERING_RATE = 0.55
+
+# Engagement requires stable confidence; disengagement is immediate.
+LKAS_MIN_CONFIDENCE = 0.65
+LKAS_ENGAGE_FRAMES = 8
 
 # -----------------------------------------------------------------------------
 # DISPLAY

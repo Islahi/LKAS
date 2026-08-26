@@ -1,4 +1,4 @@
-# QCar2 Virtual Lane Tracker v1 — Perception Baseline
+# QCar2 Virtual Lane Keeping Assist
 
 This is a deliberately small **perception-first** prototype for Quanser QLabs/QCar2.
 
@@ -8,13 +8,18 @@ It is based on the simple structure of the `imdiora/Lane-keeping-assistance-` pr
 
 This version extends that idea for a multi-lane QLabs road by clustering Hough segments and selecting the **nearest lane boundary to the left and right of the camera center**.
 
-## Baseline status
+## Project status
 
-This commit is the stable **perception-only baseline** for the QCar2 LKAS project. It detects and tracks the current lane while the driver controls steering and throttle manually. Automatic steering control, controller tuning, and LKAS disengagement logic are intentionally reserved for later versions.
+The project now has two operating modes:
 
-## Important: this is NOT autonomous control
+- **Manual:** the driver controls throttle and steering.
+- **LKAS:** the driver still controls throttle, while a conservative PID controller steers from the detected lane-center error.
 
-The lane tracker never changes the steering or throttle.
+LKAS starts off and must be requested with `L`. It engages only after several consecutive confident frames and automatically disengages on unreliable detection, a missing camera frame, manual steering input, or an emergency stop.
+
+## Important: driver-supervised simulator prototype
+
+The lane tracker itself only estimates geometry. When the driver explicitly enables LKAS, the separate PID controller may command limited steering; it never commands throttle.
 
 You drive manually with the keyboard while the program only displays:
 
@@ -26,7 +31,7 @@ You drive manually with the keyboard while the program only displays:
 - Canny/ROI debug view
 - lost-line counters
 
-This lets us prove the lane tracking works before connecting it to an LKAS controller.
+The overlays make perception and controller readiness visible during low-speed testing.
 
 ---
 
@@ -37,6 +42,7 @@ qcar2_virtual_lane_tracker_v1/
 ├── .gitignore                    <-- excludes Python cache files
 ├── run_virtual_lane_tracker.py   <-- run this
 ├── lane_detector.py              <-- perception algorithm
+├── steering_controller.py        <-- confidence-gated PID steering
 ├── settings.py                   <-- tune values here
 ├── requirements.txt
 └── README.md
@@ -82,7 +88,7 @@ Enter:
 2
 ```
 
-## 4. Drive manually
+## 4. Drive and enable LKAS when ready
 
 The keyboard listener works independently from which OpenCV window has focus.
 
@@ -91,11 +97,12 @@ W       forward
 S       reverse
 A       steer left
 D       steer right
+L       toggle LKAS steering
 SPACE   stop
 Q/ESC   quit
 ```
 
-The tracker does **not** modify these commands.
+Throttle remains manual in every mode. Pressing `A` or `D` immediately overrides and disengages LKAS. Press `L` again to request re-engagement after an override or confidence failure.
 
 ---
 
@@ -192,28 +199,29 @@ The GitHub baseline retains a previous right-line estimate when current detectio
 
 ---
 
-# Why this version does not yet use Bird's Eye View / PID
+# LKAS controller and safety gates
 
-We are deliberately validating one layer at a time:
+The controller normalizes the pixel error by half the camera width and applies PID steering with integral limiting, filtered derivative action, an absolute steering cap, and a steering slew-rate limit.
 
-```text
-Phase 1 (this package)
-Camera → Canny → ROI → Hough → current-lane boundaries
+LKAS requires:
 
-Phase 2
-Improve color filtering / curves / perspective
+- fresh left and right boundary detections (held fallback lines do not count);
+- plausible lane width;
+- sufficient Hough-line strength;
+- `LKAS_ENGAGE_FRAMES` consecutive frames above `LKAS_MIN_CONFIDENCE`.
 
-Phase 3
-Calculate calibrated lateral + heading error
+Tune the conservative starting values in `settings.py`:
 
-Phase 4
-Connect steering controller
-
-Phase 5
-Solid/dashed classification and lane-changing state machine
+```python
+PID_KP = 0.42
+PID_KI = 0.015
+PID_KD = 0.035
+LKAS_MAX_ABS_STEERING = 0.22
+LKAS_MIN_CONFIDENCE = 0.65
+LKAS_ENGAGE_FRAMES = 8
 ```
 
-A controller will not be added until Phase 1 reliably follows the correct two markings while you manually drive through straight sections and bends.
+Test at low throttle. Tune `PID_KP` first, add only enough `PID_KD` to reduce oscillation, and leave `PID_KI` small unless a persistent bias remains.
 
 ---
 
@@ -263,10 +271,8 @@ Quanser PAL's `QCarRealSense` uses the virtual RGB camera server at port 18965 a
 
 ## Current scope
 
-Success for v1 means:
+Success for this stage means:
 
-> While you manually drive the virtual QCar2, the two green lines remain attached to the actual left/right markings of the lane occupied by the QCar and the displayed lane-center error changes sensibly as you move left or right.
+> At low manual throttle, LKAS engages only with stable lane detection, makes smooth bounded corrections toward the lane center, and hands steering back immediately when detection becomes unreliable or the driver overrides it.
 
-Nothing more is required yet.
-
-The next development stage is to use the measured lane-center error as input to a conservative steering controller with confidence checks and safe disengagement.
+This remains a simulator prototype, not production vehicle-control software.

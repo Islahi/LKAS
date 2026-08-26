@@ -43,6 +43,10 @@ class TrackingResult:
     error_px: Optional[float]
     left_lost_frames: int
     right_lost_frames: int
+    left_detected: bool
+    right_detected: bool
+    lane_width_px: Optional[float]
+    confidence: float
     raw_segments: Optional[np.ndarray]
     edges: np.ndarray
     roi_edges: np.ndarray
@@ -167,8 +171,9 @@ class LaneTracker:
 
         lost_frames += 1
         if previous is not None and lost_frames <= cfg.MAX_LOST_FRAMES:
-            # Briefly hold the previous visual estimate. This affects only display/tracking,
-            # never steering because this phase has no autonomous control.
+            # Briefly hold the previous visual estimate for display. Confidence
+            # remains zero unless both boundaries were freshly detected, so the
+            # controller cannot steer from these held lines.
             return previous, previous, lost_frames
 
         return None, None, lost_frames
@@ -238,6 +243,21 @@ class LaneTracker:
                 lane_center_x = (lx + rx) / 2.0
                 error_px = lane_center_x - vehicle_center_x
 
+        left_detected = detected_left is not None
+        right_detected = detected_right is not None
+        lane_width_px = None
+        confidence = 0.0
+        if left_detected and right_detected and detected_left is not None and detected_right is not None:
+            lane_width_px = detected_right.x_at(error_y) - detected_left.x_at(error_y)
+            min_width = cfg.MIN_LANE_WIDTH_FRACTION * w
+            max_width = cfg.MAX_LANE_WIDTH_FRACTION * w
+            if min_width <= lane_width_px <= max_width:
+                weight_score = min(
+                    detected_left.weight,
+                    detected_right.weight,
+                ) / cfg.CONFIDENCE_FULL_WEIGHT
+                confidence = float(np.clip(weight_score, 0.0, 1.0))
+
         return TrackingResult(
             left=left,
             right=right,
@@ -246,6 +266,10 @@ class LaneTracker:
             error_px=error_px,
             left_lost_frames=self.left_lost_frames,
             right_lost_frames=self.right_lost_frames,
+            left_detected=left_detected,
+            right_detected=right_detected,
+            lane_width_px=lane_width_px,
+            confidence=confidence,
             raw_segments=raw,
             edges=edges,
             roi_edges=roi_edges,
@@ -295,7 +319,11 @@ def draw_overlay(frame_bgr: np.ndarray, result: TrackingResult) -> np.ndarray:
         cv2.circle(out, (lane_x, error_y), 9, (255, 255, 0), -1)
         cv2.line(out, (vehicle_x, error_y), (lane_x, error_y), (255, 255, 0), 3)
 
-    status = "TRACKING" if result.both_found and result.error_px is not None else "DEGRADED"
+    status = (
+        "TRACKING"
+        if result.left_detected and result.right_detected and result.error_px is not None
+        else "DEGRADED"
+    )
     status_color = (0, 255, 0) if status == "TRACKING" else (0, 165, 255)
 
     cv2.putText(out, f"Lane tracker: {status}", (15, 30),
@@ -312,5 +340,7 @@ def draw_overlay(frame_bgr: np.ndarray, result: TrackingResult) -> np.ndarray:
     cv2.putText(out,
                 f"lost L/R: {result.left_lost_frames}/{result.right_lost_frames}",
                 (15, 88), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (230, 230, 230), 1)
+    cv2.putText(out, f"confidence: {result.confidence:.2f}", (15, 112),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (230, 230, 230), 1)
 
     return out

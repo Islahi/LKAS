@@ -1,8 +1,8 @@
-"""Virtual QCar2 lane tracking + manual keyboard driving.
+"""Virtual QCar2 lane tracking with optional PID steering assistance.
 
 IMPORTANT:
-    This program does NOT provide autonomous steering.
-    W/A/S/D are the only source of vehicle motion.
+    LKAS controls steering only after the driver enables it with L and the
+    detector passes confidence checks. Throttle always remains manual.
 
 Normal use:
     1. Open QLabs.
@@ -15,6 +15,7 @@ Keys (held):
     S        reverse
     A        steer left
     D        steer right
+    L        toggle LKAS steering
     SPACE    immediate manual stop
     Q / ESC  quit
 """
@@ -28,6 +29,7 @@ import numpy as np
 
 import settings as cfg
 from lane_detector import LaneTracker, draw_overlay
+from steering_controller import SteeringPID, SteeringCommand
 
 
 class KeyState:
@@ -37,6 +39,8 @@ class KeyState:
         self._lock = threading.Lock()
         self._pressed = set()
         self.quit_requested = False
+        self._lkas_toggle_requested = False
+        self._stop_requested = False
 
     def press(self, name: str):
         with self._lock:
@@ -53,6 +57,26 @@ class KeyState:
     def clear_drive_keys(self):
         with self._lock:
             self._pressed.difference_update({"w", "a", "s", "d"})
+
+    def request_lkas_toggle(self):
+        with self._lock:
+            self._lkas_toggle_requested = True
+
+    def consume_lkas_toggle(self) -> bool:
+        with self._lock:
+            requested = self._lkas_toggle_requested
+            self._lkas_toggle_requested = False
+            return requested
+
+    def request_stop(self):
+        with self._lock:
+            self._stop_requested = True
+
+    def consume_stop(self) -> bool:
+        with self._lock:
+            requested = self._stop_requested
+            self._stop_requested = False
+            return requested
 
 
 def start_keyboard_listener(state: KeyState):
@@ -79,8 +103,13 @@ def start_keyboard_listener(state: KeyState):
             return
         if name in {"w", "a", "s", "d"}:
             state.press(name)
+        elif name == "l":
+            if not state.is_down("l"):
+                state.press("l")
+                state.request_lkas_toggle()
         elif name == "space":
             state.clear_drive_keys()
+            state.request_stop()
         elif name in {"q", "esc"}:
             state.quit_requested = True
             state.clear_drive_keys()
@@ -88,7 +117,7 @@ def start_keyboard_listener(state: KeyState):
 
     def on_release(key):
         name = normalize(key)
-        if name in {"w", "a", "s", "d"}:
+        if name in {"w", "a", "s", "d", "l"}:
             state.release(name)
 
     listener = keyboard.Listener(on_press=on_press, on_release=on_release)
@@ -166,8 +195,8 @@ def manual_commands(keys: KeyState):
 
 def main():
     print("=" * 72)
-    print("QCar2 VIRTUAL LANE TRACKER")
-    print("Tracking only - NO autonomous steering")
+    print("QCar2 VIRTUAL LANE KEEPING ASSIST")
+    print("Manual throttle + driver-enabled PID steering")
     print("=" * 72)
     print("Open QLabs and load Open Road before running this program.\n")
 
@@ -201,15 +230,21 @@ def main():
         keys = KeyState()
         listener = start_keyboard_listener(keys)
         tracker = LaneTracker()
+        controller = SteeringPID()
+        lkas_requested = False
+        lkas_engaged = False
+        confident_frames = 0
+        last_command = SteeringCommand(0.0, None)
 
         print("\nReady.")
         print("  Hold W = forward")
         print("  Hold S = reverse")
         print("  Hold A = steer left")
         print("  Hold D = steer right")
+        print("  L      = toggle LKAS steering")
         print("  SPACE  = stop")
         print("  Q/ESC  = quit")
-        print("\nThe green lane lines and cyan lane-center marker are VISUAL ONLY.\n")
+        print("\nLKAS starts OFF. Throttle remains manual in every mode.\n")
 
         leds = np.zeros(8, dtype=int)
         prev_time = time.perf_counter()
@@ -221,7 +256,13 @@ def main():
             # -------------------------------------------------------------
             new_frame = camera.read_RGB()
             if not new_frame:
-                # Still send manual commands even if one camera frame is missed.
+                # Never steer from stale imagery.
+                if lkas_requested or lkas_engaged:
+                    print("LKAS disengaged: camera frame unavailable")
+                lkas_requested = False
+                lkas_engaged = False
+                confident_frames = 0
+                controller.reset()
                 throttle, steering = manual_commands(keys)
                 car.read_write_std(throttle, steering, leds)
                 cv2.waitKey(1)
@@ -237,27 +278,86 @@ def main():
             result = tracker.process(frame_bgr)
             display = draw_overlay(frame_bgr, result)
 
+            now = time.perf_counter()
+            dt = max(now - prev_time, 1e-6)
+            prev_time = now
+
             # -------------------------------------------------------------
-            # 3) Manual keyboard control - completely independent of tracker
+            # 3) Manual throttle and optional confidence-gated PID steering
             # -------------------------------------------------------------
-            throttle, steering = manual_commands(keys)
+            throttle, manual_steering = manual_commands(keys)
+
+            if keys.consume_lkas_toggle():
+                lkas_requested = not lkas_requested
+                lkas_engaged = False
+                confident_frames = 0
+                controller.reset()
+                print("LKAS requested; waiting for confident lanes" if lkas_requested else "LKAS off")
+
+            if keys.consume_stop():
+                if lkas_requested or lkas_engaged:
+                    print("LKAS disengaged: emergency stop")
+                lkas_requested = False
+                lkas_engaged = False
+                confident_frames = 0
+                controller.reset()
+
+            # A/D is an immediate driver override. Re-engagement requires L.
+            if keys.is_down("a") or keys.is_down("d"):
+                if lkas_requested or lkas_engaged:
+                    print("LKAS disengaged: manual steering override")
+                lkas_requested = False
+                lkas_engaged = False
+                confident_frames = 0
+                controller.reset()
+
+            confidence_ok = (
+                result.error_px is not None
+                and result.left_detected
+                and result.right_detected
+                and result.confidence >= cfg.LKAS_MIN_CONFIDENCE
+            )
+
+            if lkas_requested:
+                if confidence_ok:
+                    confident_frames += 1
+                    if confident_frames >= cfg.LKAS_ENGAGE_FRAMES:
+                        lkas_engaged = True
+                else:
+                    if lkas_engaged:
+                        print(f"LKAS disengaged: lane confidence {result.confidence:.2f}")
+                    lkas_requested = False
+                    lkas_engaged = False
+                    confident_frames = 0
+                    controller.reset()
+
+            if lkas_engaged and result.error_px is not None:
+                last_command = controller.update(result.error_px, display.shape[1], dt)
+                steering = last_command.steering
+            else:
+                last_command = SteeringCommand(manual_steering, None)
+                steering = manual_steering
+
+            steering = float(np.clip(steering, -cfg.MAX_ABS_STEERING, cfg.MAX_ABS_STEERING))
             car.read_write_std(throttle, steering, leds)
 
             # -------------------------------------------------------------
             # 4) On-screen diagnostics
             # -------------------------------------------------------------
-            now = time.perf_counter()
-            dt = max(now - prev_time, 1e-6)
-            prev_time = now
             fps = 1.0 / dt
             fps_filtered = fps if fps_filtered == 0 else 0.9 * fps_filtered + 0.1 * fps
 
-            cv2.putText(display, f"FPS: {fps_filtered:.1f}", (15, 116),
+            cv2.putText(display, f"FPS: {fps_filtered:.1f}", (15, 140),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (230, 230, 230), 1)
+            mode = "ENGAGED" if lkas_engaged else ("ARMING" if lkas_requested else "OFF")
+            mode_color = (0, 255, 0) if lkas_engaged else ((0, 255, 255) if lkas_requested else (0, 165, 255))
             cv2.putText(display,
-                        f"MANUAL throttle={throttle:+.2f} steering={steering:+.2f}",
-                        (15, 144), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
-            cv2.putText(display, "WASD manual | SPACE stop | Q/ESC quit", (15, display.shape[0] - 18),
+                        f"LKAS: {mode} ({confident_frames}/{cfg.LKAS_ENGAGE_FRAMES})",
+                        (15, 168), cv2.FONT_HERSHEY_SIMPLEX, 0.60, mode_color, 2)
+            cv2.putText(display,
+                        f"throttle={throttle:+.2f} steering={steering:+.2f}",
+                        (15, 196), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+            cv2.putText(display, "W/S throttle | A/D override | L LKAS | SPACE stop | Q/ESC quit", (15, display.shape[0] - 18),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
 
             cv2.imshow("QCar2 - Virtual Lane Tracker", display)
@@ -278,6 +378,7 @@ def main():
                 keys.quit_requested = True
             elif k == ord(" "):
                 keys.clear_drive_keys()
+                keys.request_stop()
 
     except KeyboardInterrupt:
         print("\nStopped by user.")
