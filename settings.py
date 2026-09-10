@@ -78,7 +78,7 @@ MANUAL_REVERSE_THROTTLE = -0.08
 MANUAL_STEERING = 0.32
 
 # QCar write safety clamps.
-MAX_ABS_THROTTLE = 0.12
+MAX_ABS_THROTTLE = 0.50
 MAX_ABS_STEERING = 0.50
 
 # -----------------------------------------------------------------------------
@@ -105,6 +105,6 @@ LKAS_ENGAGE_FRAMES = 8
 # DISPLAY
 # -----------------------------------------------------------------------------
 SHOW_RAW_HOUGH_SEGMENTS = True
-SHOW_EDGE_WINDOW = True
+SHOW_EDGE_WINDOW = False
 SHOW_ROI_POLYGON = True
 LINE_THICKNESS = 6
